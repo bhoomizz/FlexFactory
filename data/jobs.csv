@@ -1,0 +1,6 @@
+job_id,machine_id,duration_hours,power_kw,release_hour,deadline_hour
+J1,M1,2,3.0,0,10
+J2,M2,3,2.0,0,12
+J3,M1,2,3.0,0,12
+J4,M3,2,1.5,0,12
+J5,M2,1,2.0,0,12
