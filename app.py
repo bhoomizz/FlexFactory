@@ -6,10 +6,10 @@ import plotly.express as px
 from src.baseline import (
     load_data,
     validate_schedule,
-    calculate_costs,
     HORIZON,
     build_solar_profile,
-    estimate_grid_energy_and_emissions,
+    calculate_schedule_energy_metrics,
+    calculate_schedule_comparison_metrics,
 )
 from src.optimizer import optimize_schedule
 
@@ -277,7 +277,6 @@ try:
             if errors:
                 raise ValueError("Optimizer schedule validation failed: " + "; ".join(errors))
 
-            opt_energy, opt_cost, _ = calculate_costs(jobs, prices, optimized)
             baseline = make_earliest_schedule(machines, jobs, prices)
 
             result = {
@@ -286,17 +285,8 @@ try:
                 "prices": prices,
                 "optimized": optimized,
                 "status": status,
-                "opt_energy": opt_energy,
-                "opt_cost": opt_cost,
                 "baseline": baseline,
             }
-
-            if baseline is not None:
-                base_energy, base_cost, _ = calculate_costs(jobs, prices, baseline)
-                result.update({
-                    "base_energy": base_energy,
-                    "base_cost": base_cost,
-                })
 
             st.session_state["flexfactory_result"] = result
 
@@ -317,37 +307,12 @@ try:
 
             solar_profile = build_solar_profile()
             solar_df = pd.DataFrame(solar_profile)
+            solar_df = solar_df.rename(columns={"solar_available_kwh": "solar_available_kwh"})
 
-            if result["baseline"] is not None:
-                base_cost = result["base_cost"]
-                opt_cost = result["opt_cost"]
-                savings = base_cost - opt_cost
-                savings_percent = savings / base_cost * 100 if base_cost else 0
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Earliest-start cost", f"₹{base_cost:.2f}")
-                c2.metric("Optimized cost", f"₹{opt_cost:.2f}")
-                c3.metric("Cost difference", f"₹{savings:.2f}",
-                          delta=f"{savings_percent:.2f}%")
-                c4.metric("Optimized energy", f"{result['opt_energy']:.1f} kWh")
-
-                st.caption(
-                    "Comparison uses an automatically generated earliest-start baseline. "
-                    "A positive cost difference indicates lower optimized cost."
-                )
-            else:
-                c1, c2 = st.columns(2)
-                c1.metric("Optimized electricity cost", f"₹{result['opt_cost']:.2f}")
-                c2.metric("Optimized energy", f"{result['opt_energy']:.1f} kWh")
-                st.info(
-                    "A valid earliest-start baseline could not be generated for these inputs. "
-                    "Savings are hidden to avoid a misleading comparison."
-                )
-
-            st.header("4. Solar match and grid use")
+            st.header("4. Simulated cost and solar use")
             st.caption(
-                "Solar availability is a simulated daily profile. It estimates how much of the "
-                "production energy aligns with solar generation hours. Grid energy is the remaining demand."
+                "Tariffs and solar availability use the supplied project CSVs unless edited above. "
+                "Costs and savings are simulated estimates, not measured factory results."
             )
 
             factor = st.slider(
@@ -361,35 +326,67 @@ try:
             solar_chart = px.line(
                 solar_df,
                 x="hour",
-                y="availability",
+                y="solar_available_kwh",
                 markers=True,
                 title="Simulated hourly solar availability profile",
-                labels={"hour": "Hour", "availability": "Solar availability (0–1)"},
+                labels={"hour": "Hour", "solar_available_kwh": "Solar available (kWh)"},
             )
             st.plotly_chart(solar_chart, use_container_width=True)
 
             if result["baseline"] is not None:
-                baseline_solar, base_grid_energy, base_emissions, base_share = estimate_grid_energy_and_emissions(
-                    result["baseline"], jobs, solar_profile, emissions_factor=factor
+                comparison_metrics = calculate_schedule_comparison_metrics(
+                    result["baseline"],
+                    optimized,
+                    jobs,
+                    prices,
+                    solar_profile,
+                    emissions_factor=factor,
                 )
-                opt_solar, opt_grid_energy, opt_emissions, opt_share = estimate_grid_energy_and_emissions(
-                    optimized, jobs, solar_profile, emissions_factor=factor
-                )
+                baseline_metrics = comparison_metrics["baseline"]
+                optimized_metrics = comparison_metrics["optimized"]
 
-                a, b, c, d = st.columns(4)
-                a.metric("Baseline solar match", f"{baseline_solar:.1f} kWh")
-                b.metric("Optimized solar match", f"{opt_solar:.1f} kWh")
-                c.metric("Baseline grid energy", f"{base_grid_energy:.1f} kWh")
-                d.metric("Optimized grid energy", f"{opt_grid_energy:.1f} kWh")
+                comparison_table = pd.DataFrame([
+                    {
+                        "Scenario": "Earliest-start baseline",
+                        "Gross electricity cost (₹)": baseline_metrics["gross_cost_rupees"],
+                        "Grid electricity cost (₹)": baseline_metrics["grid_cost_rupees"],
+                        "Grid energy (kWh)": baseline_metrics["grid_energy_kwh"],
+                        "Solar energy used (kWh)": baseline_metrics["solar_used_kwh"],
+                    },
+                    {
+                        "Scenario": "Optimized",
+                        "Gross electricity cost (₹)": optimized_metrics["gross_cost_rupees"],
+                        "Grid electricity cost (₹)": optimized_metrics["grid_cost_rupees"],
+                        "Grid energy (kWh)": optimized_metrics["grid_energy_kwh"],
+                        "Solar energy used (kWh)": optimized_metrics["solar_used_kwh"],
+                    },
+                ])
+                st.dataframe(comparison_table, use_container_width=True, hide_index=True)
+
+                reduction_percent = comparison_metrics["grid_cost_reduction_percent"]
+                reduction_delta = (
+                    f"{reduction_percent:.2f}% of baseline grid cost"
+                    if reduction_percent is not None
+                    else "Baseline grid cost is zero"
+                )
+                st.metric(
+                    "Simulated grid-cost reduction",
+                    f"₹{comparison_metrics['grid_cost_reduction_rupees']:.2f}",
+                    delta=reduction_delta,
+                )
+                st.caption(
+                    "Reduction is baseline grid electricity cost minus optimized grid electricity cost. "
+                    "A negative value means the optimized schedule costs more from the grid."
+                )
 
                 a, b = st.columns(2)
-                a.metric("Baseline estimated CO₂", f"{base_emissions:.2f} kg")
-                b.metric("Optimized estimated CO₂", f"{opt_emissions:.2f} kg")
+                a.metric("Baseline estimated CO₂", f"{baseline_metrics['estimated_emissions_kg']:.2f} kg")
+                b.metric("Optimized estimated CO₂", f"{optimized_metrics['estimated_emissions_kg']:.2f} kg")
 
                 comparison = pd.DataFrame({
                     "Scenario": ["Earliest-start", "Optimized"],
-                    "Grid energy (kWh)": [base_grid_energy, opt_grid_energy],
-                    "Estimated CO₂ (kg)": [base_emissions, opt_emissions],
+                    "Grid energy (kWh)": [baseline_metrics["grid_energy_kwh"], optimized_metrics["grid_energy_kwh"]],
+                    "Estimated CO₂ (kg)": [baseline_metrics["estimated_emissions_kg"], optimized_metrics["estimated_emissions_kg"]],
                 })
                 fig_emissions = px.bar(
                     comparison,
@@ -400,17 +397,25 @@ try:
                 st.plotly_chart(fig_emissions, use_container_width=True)
 
                 st.caption(
-                    f"Solar share: baseline {base_share * 100:.1f}% vs optimized {opt_share * 100:.1f}%."
+                    f"Solar share: baseline {baseline_metrics['solar_share'] * 100:.1f}% vs optimized {optimized_metrics['solar_share'] * 100:.1f}%."
                 )
             else:
-                opt_solar, opt_grid_energy, opt_emissions, opt_share = estimate_grid_energy_and_emissions(
-                    optimized, jobs, solar_profile, emissions_factor=factor
+                optimized_metrics = calculate_schedule_energy_metrics(
+                    optimized, jobs, prices, solar_profile, emissions_factor=factor
                 )
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Solar-coincident energy", f"{opt_solar:.1f} kWh")
-                c2.metric("Grid energy", f"{opt_grid_energy:.1f} kWh")
-                c3.metric("Estimated CO₂", f"{opt_emissions:.2f} kg")
-                st.caption(f"Solar share: {opt_share * 100:.1f}%.")
+                st.dataframe(pd.DataFrame([{
+                    "Scenario": "Optimized",
+                    "Gross electricity cost (₹)": optimized_metrics["gross_cost_rupees"],
+                    "Grid electricity cost (₹)": optimized_metrics["grid_cost_rupees"],
+                    "Grid energy (kWh)": optimized_metrics["grid_energy_kwh"],
+                    "Solar energy used (kWh)": optimized_metrics["solar_used_kwh"],
+                }]), use_container_width=True, hide_index=True)
+                st.metric("Estimated grid emissions", f"{optimized_metrics['estimated_emissions_kg']:.2f} kg CO₂")
+                st.info(
+                    "A valid earliest-start baseline could not be generated for these inputs. "
+                    "Cost reduction is not shown."
+                )
+                st.caption(f"Solar share: {optimized_metrics['solar_share'] * 100:.1f}%.")
 
             st.header("5. Optimized production schedule")
             optimized_df = pd.DataFrame(optimized).merge(
@@ -438,7 +443,7 @@ try:
             
             
             
-            st.header("5. Production Schedule")
+            st.header("6. Production timeline")
 
             import plotly.express as px
 
@@ -474,7 +479,7 @@ try:
                 key="production_gantt",
             )
 
-            st.header("5. Download results")
+            st.header("7. Download results")
             st.download_button(
                 "Download optimized schedule (CSV)",
                 data=optimized_df.to_csv(index=False).encode("utf-8"),

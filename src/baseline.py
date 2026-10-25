@@ -135,52 +135,171 @@ def calculate_costs(jobs, prices, schedule):
     return total_energy, total_cost, details
 
 
-def build_solar_profile():
-    """Return a simple simulated hourly solar availability profile.
+def load_solar_profile():
+    """Load the canonical simulated solar profile from the project CSV file."""
+    path = DATA / "solar_availability.csv"
 
-    Availability is expressed as a fraction between 0 and 1, where 1 means
-    full solar availability for that hour.
-    """
-    profile = [
-        0.00, 0.00, 0.10, 0.25, 0.45, 0.70,
-        0.95, 1.00, 0.85, 0.50, 0.15, 0.00,
-    ]
+    with open(path, newline="", encoding="utf-8-sig") as file:
+        profile = {
+            int(row["hour"]): float(row["solar_available_kwh"])
+            for row in csv.DictReader(file)
+        }
+
+    if any(value < 0 for value in profile.values()):
+        raise ValueError("Solar availability cannot be negative.")
+
+    if set(profile) != set(range(HORIZON)):
+        raise ValueError(
+            f"Solar profile must contain every hour from 0 to {HORIZON - 1}."
+        )
+
+    return profile
+
+
+def _solar_map(solar_profile):
+    if isinstance(solar_profile, dict):
+        return {int(hour): float(value) for hour, value in solar_profile.items()}
+
+    return {
+        int(row["hour"]): float(
+            row.get("solar_available_kwh", row.get("availability", 0.0))
+        )
+        for row in solar_profile
+    }
+
+
+def build_solar_profile():
+    """Return the canonical hourly solar profile in a tabular format."""
+    profile = load_solar_profile()
     return [
-        {"hour": hour, "start_hour": hour, "end_hour": hour + 1, "availability": availability}
-        for hour, availability in enumerate(profile)
+        {
+            "hour": hour,
+            "start_hour": hour,
+            "end_hour": hour + 1,
+            "solar_available_kwh": profile[hour],
+            "availability": profile[hour],
+        }
+        for hour in range(HORIZON)
     ]
+
+
+def calculate_schedule_energy_metrics(
+    schedule,
+    jobs,
+    prices,
+    solar_profile,
+    emissions_factor=0.45,
+):
+    """Calculate production, solar-use, grid-energy, and emissions metrics."""
+    job_map = {job["job_id"]: job for job in jobs}
+    price_map = {int(p["start_hour"]): float(p["price_per_kwh"]) for p in prices}
+    solar_map = _solar_map(solar_profile)
+    hourly_load = {hour: 0.0 for hour in range(HORIZON)}
+
+    for row in schedule:
+        job = job_map[row["job_id"]]
+        power = float(job["power_kw"])
+        for hour in range(int(row["start_hour"]), int(row["end_hour"])):
+            hourly_load[hour] += power
+
+    hourly_solar_used = {
+        hour: min(hourly_load[hour], solar_map.get(hour, 0.0))
+        for hour in range(HORIZON)
+    }
+    hourly_grid = {
+        hour: max(hourly_load[hour] - hourly_solar_used[hour], 0.0)
+        for hour in range(HORIZON)
+    }
+
+    total_energy = sum(hourly_load.values())
+    total_solar = sum(hourly_solar_used.values())
+    total_grid = sum(hourly_grid.values())
+    gross_cost = sum(
+        hourly_load[hour] * price_map.get(hour, 0.0)
+        for hour in range(HORIZON)
+    )
+    grid_cost = sum(
+        hourly_grid[hour] * price_map.get(hour, 0.0)
+        for hour in range(HORIZON)
+    )
+    estimated_emissions = total_grid * float(emissions_factor)
+    solar_share = total_solar / total_energy if total_energy else 0.0
+
+    return {
+        "total_energy_kwh": total_energy,
+        "gross_cost_rupees": gross_cost,
+        "solar_used_kwh": total_solar,
+        "grid_energy_kwh": total_grid,
+        "grid_cost_rupees": grid_cost,
+        "estimated_emissions_kg": estimated_emissions,
+        "solar_share": solar_share,
+        "hourly_load_kwh": hourly_load,
+        "hourly_solar_used_kwh": hourly_solar_used,
+        "hourly_grid_energy_kwh": hourly_grid,
+    }
+
+
+def calculate_schedule_comparison_metrics(
+    baseline_schedule,
+    optimized_schedule,
+    jobs,
+    prices,
+    solar_profile,
+    emissions_factor=0.45,
+):
+    """Calculate comparable solar-aware metrics for two schedules."""
+    baseline_metrics = calculate_schedule_energy_metrics(
+        baseline_schedule,
+        jobs,
+        prices,
+        solar_profile,
+        emissions_factor=emissions_factor,
+    )
+    optimized_metrics = calculate_schedule_energy_metrics(
+        optimized_schedule,
+        jobs,
+        prices,
+        solar_profile,
+        emissions_factor=emissions_factor,
+    )
+    baseline_grid_cost = baseline_metrics["grid_cost_rupees"]
+    grid_cost_reduction = (
+        baseline_grid_cost - optimized_metrics["grid_cost_rupees"]
+    )
+
+    return {
+        "baseline": baseline_metrics,
+        "optimized": optimized_metrics,
+        "grid_cost_reduction_rupees": grid_cost_reduction,
+        "grid_cost_reduction_percent": (
+            grid_cost_reduction / baseline_grid_cost * 100
+            if baseline_grid_cost
+            else None
+        ),
+    }
 
 
 def estimate_solar_coincidence(schedule, jobs, solar_profile):
-    """Estimate how much scheduled production energy coincides with solar availability."""
-    job_map = {job["job_id"]: job for job in jobs}
-    solar_map = {int(row["hour"]): float(row["availability"]) for row in solar_profile}
-
-    total_solar_energy = 0.0
-    for row in schedule:
-        job = job_map[row["job_id"]]
-        duration = int(row["end_hour"]) - int(row["start_hour"])
-        power = float(job["power_kw"])
-
-        for hour in range(int(row["start_hour"]), int(row["end_hour"])):
-            total_solar_energy += power * solar_map.get(hour, 0.0)
-
-    return total_solar_energy
+    """Return the amount of scheduled production energy aligned with solar."""
+    metrics = calculate_schedule_energy_metrics(schedule, jobs, [], solar_profile)
+    return metrics["solar_used_kwh"]
 
 
 def estimate_grid_energy_and_emissions(schedule, jobs, solar_profile, emissions_factor=0.45):
     """Return solar-aligned energy, grid energy, emissions, and solar-share metrics."""
-    job_map = {job["job_id"]: job for job in jobs}
-    total_energy = 0.0
-    for row in schedule:
-        job = job_map[row["job_id"]]
-        total_energy += float(job["power_kw"]) * (int(row["end_hour"]) - int(row["start_hour"]))
-
-    solar_match = estimate_solar_coincidence(schedule, jobs, solar_profile)
-    grid_energy = max(0.0, total_energy - solar_match)
-    emissions = grid_energy * float(emissions_factor)
-    solar_share = solar_match / total_energy if total_energy else 0.0
-    return solar_match, grid_energy, emissions, solar_share
+    metrics = calculate_schedule_energy_metrics(
+        schedule,
+        jobs,
+        [{"start_hour": hour, "end_hour": hour + 1, "price_per_kwh": 0.0} for hour in range(HORIZON)],
+        solar_profile,
+        emissions_factor=emissions_factor,
+    )
+    return (
+        metrics["solar_used_kwh"],
+        metrics["grid_energy_kwh"],
+        metrics["estimated_emissions_kg"],
+        metrics["solar_share"],
+    )
 
 
 def main():

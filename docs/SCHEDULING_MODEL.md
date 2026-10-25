@@ -1,22 +1,12 @@
 # FlexFactory Scheduling Model
 
 ## Status
-Scheduling assumptions finalized. Simulated dataset created. Baseline calculator and feasibility checker implemented and tested with three passing tests. Optimization engine not yet implemented.
+Scheduling assumptions are finalized. The baseline calculator, feasibility checker, and solar-aware CP-SAT optimizer are implemented and tested. The optimizer writes a validated schedule to `data/optimized_schedule.csv` when run with `python -m src.optimizer`.
 
-Implementation verification
-
-The Python baseline calculator reports:
-
-Total energy: 23 kWh
-
-Baseline electricity cost: ₹97
-
-Baseline schedule: Valid
-
-The automated tests cover baseline validity, expected energy and cost totals, and machine-conflict detection.
+The current dashboard and optimizer use the shared scheduling and energy-analysis helpers. The full test suite covers baseline validity, optimizer validity, export behavior, dashboard comparison metrics, and solar accounting.
 
 ## 1. Objective
-Minimize total electricity cost by shifting production jobs to cheaper hourly slots while respecting job deadlines and machine constraints.
+Minimize grid electricity cost after hourly solar use, while respecting job deadlines and machine constraints. Gross electricity cost is reported separately and is not the solar-aware solver objective.
 
 ## 2. Planning horizon
 - Horizon: hour 0 through hour 12.
@@ -77,8 +67,8 @@ The baseline is stored in `data/baseline_schedule.csv`.
 
 The baseline is feasible under the defined constraints. Its calculated electricity cost is ₹97.
 
-## 9. Lower-cost reference schedule
-A candidate lower-cost feasible schedule for later testing is:
+## 9. Historical gross-cost reference schedule
+A historically documented feasible schedule has gross electricity cost ₹89.50:
 
 | Job | Start | End |
 |---|---:|---:|
@@ -88,7 +78,7 @@ A candidate lower-cost feasible schedule for later testing is:
 | J4 | 10 | 12 |
 | J5 | 11 | 12 |
 
-Its calculated electricity cost is ₹89.50, a reduction of ₹7.50 (approximately 7.73%) compared with the baseline. This is a reference schedule, not yet a result produced or verified by the optimization engine. The solver may find an equal or better schedule.
+This is a gross-cost reference only. It is not the current solar-aware optimizer result and should not be interpreted as a grid-cost comparison.
 
 ## 10. Validation requirements
 The implementation must check:
@@ -107,5 +97,35 @@ The implementation must check:
 - Startup energy, standby consumption, maintenance, setup times, and real-world production dependencies are excluded.
 - Emissions are not optimized in the first implementation. Any future emissions estimate requires a suitable emissions-intensity dataset and a documented calculation method.
 
-## 12. Next task
-Implement a constraint-based optimizer that minimizes electricity cost while respecting fixed machine assignments, job durations, release times, deadlines, the planning horizon, and machine non-overlap constraints. Validate its output using the existing feasibility checker.
+## 12. Solar-aware objective and validation
+The optimizer now minimizes grid electricity cost after subtracting usable solar energy.
+
+For each hour h:
+- `load_kwh[h]` = scheduled production energy in that hour
+- `solar_used_kwh[h]` = min(load_kwh[h], solar_available_kwh[h])
+- `grid_energy_kwh[h]` = max(load_kwh[h] - solar_used_kwh[h], 0)
+- `grid_cost[h]` = `grid_energy_kwh[h] * electricity_price[h]`
+
+The optimization objective is therefore:
+
+`sum(grid_energy_kwh[h] * electricity_price[h])`
+
+with integer-compatible scaling for the CP-SAT model. Gross electricity cost is still tracked separately as a reporting metric, but it is not the solver objective for the solar-aware version.
+
+The solar usage variables are bounded by both the available solar energy in that hour and the total production load in that same hour. This avoids double counting and keeps the energy balance physically consistent.
+
+## 13. Verified implementation status
+The current implementation uses `data/solar_availability.csv` and `data/electricity_prices.csv` as canonical simulated inputs. For each hour, solar used is bounded by both available solar and scheduled load; grid energy is the remaining load. The schedule is checked for job coverage, duration, release times, deadlines, planning horizon, and machine conflicts before export.
+
+The current simulated comparison, using the earliest-start baseline and a fresh optimizer result, is:
+
+| Metric | Baseline | Optimized |
+|---|---:|---:|
+| Gross electricity cost | ₹97.00 | ₹121.00 |
+| Solar energy used | 0.00 kWh | 11.50 kWh |
+| Grid energy consumed | 23.00 kWh | 11.50 kWh |
+| Grid electricity cost | ₹97.00 | ₹42.00 |
+
+The dashboard calculates both schedules from the currently submitted job and tariff inputs and uses the canonical solar profile for both. Solar availability is applied once per hour to the aggregate load across all simultaneously running jobs, so it cannot be counted once per machine. The displayed optimized schedule is the result returned by the current optimizer run, not a schedule loaded from `data/optimized_schedule.csv`.
+
+These values come from the provided simulated schedules and inputs. They are not measured real-world savings. The full automated suite passed: `python -m pytest -q` — 13 passed in 3.09s.

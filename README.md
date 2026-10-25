@@ -11,8 +11,9 @@ It uses **Google OR-Tools CP-SAT** to find a feasible, lower-cost production sch
 
 - Baseline production schedule and electricity-cost calculation
 - Production scheduling using Google OR-Tools
+- Solar-aware grid electricity cost optimization using the canonical hourly profile
 - Machine-conflict and deadline validation
-- Electricity-cost and energy-consumption comparison
+- Gross electricity cost, solar use, and grid-energy comparison
 - Interactive Streamlit dashboard with charts
 - Downloadable optimized schedule in CSV format
 - Automated tests for the baseline calculator and optimizer
@@ -45,6 +46,7 @@ FlexFactory/
 │   ├── machines.csv
 │   ├── jobs.csv
 │   ├── electricity_prices.csv
+│   ├── solar_availability.csv
 │   ├── baseline_schedule.csv
 │   └── optimized_schedule.csv
 └── docs/
@@ -80,7 +82,9 @@ To generate an optimized schedule independently, run:
 python -m src.optimizer
 ```
 
-The optimizer validates the input baseline, searches for a lower-cost feasible schedule, and writes the result to `data/optimized_schedule.csv`.
+The optimizer reads the tariff and canonical solar profiles from `data/electricity_prices.csv` and `data/solar_availability.csv`, minimizes grid electricity cost, validates the generated schedule, and then writes it to `data/optimized_schedule.csv`. This CSV is a generated optimizer output, not a manually maintained example; rerun the command after changing input data or the model.
+
+The dashboard solves using the currently submitted job, machine, and tariff values, then displays the schedule returned by that solve. It does not load a possibly stale optimized schedule CSV. Solar availability continues to come from the canonical solar profile.
 
 ## Run the Baseline Calculator
 
@@ -93,10 +97,10 @@ This calculates baseline energy consumption and electricity costs and checks sch
 ## Run the Automated Tests
 
 ```bash
-python -m unittest discover -s tests -v
+python -m pytest -q
 ```
 
-The tests cover baseline validity, cost calculations, machine conflicts, solver output, optimized schedule feasibility, and comparison with baseline cost.
+The tests cover baseline validity, cost calculations, machine conflicts, solver output, optimized schedule feasibility, solar bounds, regenerated-export parity, dashboard comparison metrics, and aggregate solar use across simultaneous machines. The verified suite result for the current implementation is **13 passed**.
 
 ## Scheduling Model
 
@@ -110,7 +114,20 @@ The current prototype uses a 12-hour planning horizon with hourly scheduling dec
 - Jobs are non-preemptive: once started, a job runs for its full duration.
 - Electricity costs vary by hour.
 
-The optimizer minimizes the estimated electricity cost while respecting these constraints.
+The optimizer minimizes grid electricity cost after hourly solar use, while respecting these constraints. Gross electricity cost remains a separate reporting metric.
+
+### Verified simulated comparison
+
+Using the current sample schedules, tariff CSV, and canonical solar CSV:
+
+| Metric | Baseline | Optimized |
+|---|---:|---:|
+| Gross electricity cost | ₹97.00 | ₹121.00 |
+| Solar energy used | 0.00 kWh | 11.50 kWh |
+| Grid energy consumed | 23.00 kWh | 11.50 kWh |
+| Grid electricity cost | ₹97.00 | ₹42.00 |
+
+These are model results from simulated inputs, not measured or claimed real-world savings. The optimized schedule can have higher gross cost while lowering grid cost because the objective accounts for the hourly solar profile.
 
 ## Sustainability Impact
 

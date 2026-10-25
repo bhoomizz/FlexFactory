@@ -1,5 +1,6 @@
 
 import csv
+from pathlib import Path
 
 from ortools.sat.python import cp_model
 
@@ -9,35 +10,15 @@ from src.baseline import (
     load_data,
     validate_schedule,
     calculate_costs,
+    calculate_schedule_energy_metrics,
+    load_solar_profile,
 )
-
-
-def load_solar_profile():
-    path = DATA / "solar_availability.csv"
-
-    with open(path, newline="", encoding="utf-8-sig") as file:
-        profile = {
-            int(row["hour"]): float(row["solar_available_kwh"])
-            for row in csv.DictReader(file)
-        }
-
-    if any(value < 0 for value in profile.values()):
-        raise ValueError("Solar availability cannot be negative.")
-
-    if set(profile) != set(range(HORIZON)):
-        raise ValueError(
-            f"Solar profile must contain every hour from 0 to {HORIZON - 1}."
-        )
-
-    return profile
 
 
 def optimize_schedule(machines, jobs, prices):
     model = cp_model.CpModel()
     solar_profile = load_solar_profile()
-
-    # Scale energy by 2 to support power values such as 1.5 kW.
-    scale = 2
+    scale = 10
 
     price_map = {
         int(p["start_hour"]): float(p["price_per_kwh"])
@@ -54,7 +35,6 @@ def optimize_schedule(machines, jobs, prices):
     machine_intervals = {
         machine["machine_id"]: [] for machine in machines
     }
-
     hourly_load = {hour: [] for hour in range(HORIZON)}
 
     for job in jobs:
@@ -67,8 +47,7 @@ def optimize_schedule(machines, jobs, prices):
 
         if duration <= 0 or power < 0:
             raise ValueError(
-                f"Job {job_id} must have positive duration "
-                "and non-negative power."
+                f"Job {job_id} must have positive duration and non-negative power."
             )
 
         if machine_id not in machine_intervals:
@@ -80,19 +59,14 @@ def optimize_schedule(machines, jobs, prices):
         latest = min(HORIZON - duration, deadline - duration)
 
         if earliest > latest:
-            raise ValueError(
-                f"No feasible start time for {job_id}."
-            )
+            raise ValueError(f"No feasible start time for {job_id}.")
 
-        start = model.NewIntVar(
-            earliest, latest, f"start_{job_id}"
-        )
+        start = model.NewIntVar(earliest, latest, f"start_{job_id}")
         end = model.NewIntVar(
             earliest + duration,
             latest + duration,
             f"end_{job_id}",
         )
-
         model.Add(end == start + duration)
 
         interval = model.NewIntervalVar(
@@ -105,69 +79,47 @@ def optimize_schedule(machines, jobs, prices):
         power_scaled = int(round(power * scale))
 
         for hour in range(HORIZON):
-            active = model.NewBoolVar(
-                f"active_{job_id}_{hour}"
-            )
-
-            allowed = [
-                (
-                    start_time,
-                    int(
-                        start_time <= hour
-                        < start_time + duration
-                    ),
-                )
-                for start_time in range(earliest, latest + 1)
-            ]
-
-            model.AddAllowedAssignments(
-                [start, active], allowed
-            )
-
+            active = model.NewBoolVar(f"active_{job_id}_{hour}")
+            allowed = []
+            for start_time in range(earliest, latest + 1):
+                active_value = 1 if start_time <= hour < start_time + duration else 0
+                allowed.append((start_time, active_value))
+            model.AddAllowedAssignments([start, active], allowed)
             hourly_load[hour].append(power_scaled * active)
 
-    # Each machine can handle only one job at a time.
     for machine_jobs in machine_intervals.values():
         model.AddNoOverlap(machine_jobs)
 
-    grid_load = {}
-
-    # Solar is shared across all jobs running in each hour.
+    solar_used = {}
+    grid_energy = {}
     for hour in range(HORIZON):
         total_load = sum(hourly_load[hour])
+        solar_available = int(round(solar_profile[hour] * scale))
 
-        solar_available = int(
-            round(solar_profile[hour] * scale)
-        )
-
-        solar_used = model.NewIntVar(
-            0, solar_available, f"solar_used_{hour}"
-        )
-
-        model.Add(solar_used <= total_load)
-
-        grid_load[hour] = model.NewIntVar(
+        solar_used[hour] = model.NewIntVar(
             0,
-            sum(
-                int(round(float(job["power_kw"]) * scale))
-                for job in jobs
-            ),
-            f"grid_load_{hour}",
+            solar_available,
+            f"solar_used_{hour}",
         )
+        model.Add(solar_used[hour] <= total_load)
 
-        model.Add(grid_load[hour] == total_load - solar_used)
+        grid_energy[hour] = model.NewIntVar(
+            0,
+            sum(int(round(float(job["power_kw"]) * scale)) for job in jobs),
+            f"grid_energy_{hour}",
+        )
+        model.Add(grid_energy[hour] == total_load - solar_used[hour])
 
-    # Minimize the cost of electricity drawn from the grid.
-    model.Minimize(
-    sum(
-        sum(hourly_load[hour]) * int(price_map[hour] * scale)
+    objective = sum(
+        grid_energy[hour] * int(round(price_map[hour]))
         for hour in range(HORIZON)
     )
-)
+    model.Minimize(objective)
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 10
-
+    solver.parameters.num_search_workers = 1
+    solver.parameters.random_seed = 0
     status = solver.Solve(model)
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
@@ -177,12 +129,10 @@ def optimize_schedule(machines, jobs, prices):
         )
 
     schedule = []
-
     for job in jobs:
         job_id = job["job_id"]
         start_hour = solver.Value(starts[job_id])
         duration = int(job["duration_hours"])
-
         schedule.append({
             "job_id": job_id,
             "start_hour": start_hour,
@@ -192,8 +142,17 @@ def optimize_schedule(machines, jobs, prices):
     return schedule, solver.StatusName(status)
 
 
-def save_schedule(schedule):
-    output_path = DATA / "optimized_schedule.csv"
+def save_schedule(schedule, machines, jobs, prices, output_path=None):
+    errors = validate_schedule(machines, jobs, prices, schedule)
+    if errors:
+        raise ValueError(
+            "Refusing to save an invalid schedule: " + "; ".join(errors)
+        )
+
+    if output_path is None:
+        output_path = DATA / "optimized_schedule.csv"
+    else:
+        output_path = Path(output_path)
 
     with open(
         output_path, "w", newline="", encoding="utf-8"
@@ -206,6 +165,12 @@ def save_schedule(schedule):
         writer.writerows(schedule)
 
     return output_path
+
+
+def generate_and_save_schedule(machines, jobs, prices):
+    schedule, status = optimize_schedule(machines, jobs, prices)
+    output_path = save_schedule(schedule, machines, jobs, prices)
+    return schedule, status, output_path
 
 
 def main():
@@ -223,24 +188,14 @@ def main():
         jobs, prices, baseline
     )
 
-    optimized, status = optimize_schedule(
+    optimized, status, output_path = generate_and_save_schedule(
         machines, jobs, prices
     )
-
-    errors = validate_schedule(
-        machines, jobs, prices, optimized
-    )
-    if errors:
-        raise ValueError(
-            "Optimizer produced an invalid schedule: "
-            + "; ".join(errors)
-        )
 
     energy, optimized_cost, _ = calculate_costs(
         jobs, prices, optimized
     )
 
-    output_path = save_schedule(optimized)
     savings = baseline_cost - optimized_cost
     savings_percent = (
         savings / baseline_cost * 100 if baseline_cost else 0

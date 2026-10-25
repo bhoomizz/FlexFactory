@@ -219,8 +219,121 @@ Create the first Streamlit dashboard for FlexFactory.
 ### Next task
 Re-run all six tests and confirm the existing core functionality remains intact before adding features.
 
-### Handover instructions
-Read `PROJECT_OVERVIEW.md`, `TASK_LOG.md`, and `docs/SCHEDULING_MODEL.md`. Inspect the existing implementation before making changes. Preserve working code and update the documentation after each completed task.
+---
+
+## Session 007 — 25 October 2026
+
+### Task
+Resolve the optimizer regression and align the model to the canonical hourly solar profile.
+
+### Work completed
+- Verified the active terminal was inside a Python REPL during the earlier failure and restored the normal PowerShell prompt.
+- Confirmed the repo uses `data/solar_availability.csv` as the canonical hourly solar source.
+- Confirmed the optimizer objective minimizes grid electricity cost after solar use, while gross cost remains a separate metric.
+- Replaced the outdated gross-cost assertion with tests for grid-cost improvement and hourly solar constraints.
+- Updated project docs to document the actual solar-aware model, assumptions, and verified test status.
+
+### Files modified
+- `src/baseline.py` — shared helper for hourly solar-aware energy and grid metrics.
+- `src/optimizer.py` — objective and variables aligned to grid-cost minimization after solar offset.
+- `tests/test_optimizer.py` — meaningful grid-cost and solar-constraint checks.
+- `PROJECT_OVERVIEW.md` — documented the solar-aware scheduling model and current implementation status.
+- `TASK_LOG.md` — recorded the model correction and verification work.
+- `docs/SCHEDULING_MODEL.md` — updated the scheduling assumptions to reflect the solar-aware objective.
+
+### Tests performed
+- `powershell -NoLogo -NoProfile -Command "Get-Location; python --version; python -m pytest -q"`
+
+### Actual test results
+- 9 passed in 2.86s.
+
+### Decisions made
+- Gross electricity cost and grid electricity cost are different metrics and are reported separately.
+- Solar availability is constrained by both hourly solar availability and the total production load in each hour.
+- The baseline and optimized schedules use the same solar CSV and the same energy-balance logic.
+
+### Remaining issues
+- None at the current verified state.
+
+### Next task
+- Prepare final handoff and keep the verified solar-aware model as the baseline for future work.
+
+### Overview updated?
+- Yes
+
+### Handoff ready?
+- Yes
+
+---
+
+## Session 009 — 25 October 2026
+
+### Task
+Align the Streamlit dashboard with the canonical solar-aware scheduling model.
+
+### Work completed
+- Confirmed the dashboard generates its optimized schedule by calling the current optimizer with submitted form values; it does not read `data/optimized_schedule.csv` for display.
+- Added shared baseline/optimized comparison metrics for gross cost, grid cost, grid energy, solar energy, and grid-cost reduction.
+- Updated the dashboard to show those metrics together and label its data and cost reduction as simulated.
+- Kept the canonical solar profile and submitted tariff rows flowing into both optimizer and shared metric calculations.
+- Added coverage showing solar is applied once against aggregate load when multiple machines run simultaneously.
+- Added metric consistency tests and updated project documentation.
+
+### Files changed
+- `app.py`
+- `src/baseline.py`
+- `tests/test_baseline.py`
+- `tests/test_optimizer.py`
+- `README.md`
+- `PROJECT_OVERVIEW.md`
+- `docs/SCHEDULING_MODEL.md`
+- `TASK_LOG.md`
+
+### Tests performed
+- Focused tests: `python -m pytest tests/test_baseline.py tests/test_optimizer.py -q`
+- Full suite: `python -m pytest -q`
+
+### Actual test results
+- Focused tests: 12 passed in 4.80s.
+- Full suite: 13 passed in 3.09s.
+
+### Decisions made
+- The dashboard compares the automatically generated earliest-start baseline with the fresh optimized schedule using grid electricity cost for the reduction metric.
+- Gross cost is shown separately because it can rise even when grid cost falls due to solar use.
+- The shared hourly energy helper aggregates all jobs before applying each hour's available solar once.
+
+### Remaining issues
+- None identified in the requested dashboard calculations; all supplied factory, solar, and tariff inputs remain simulated.
+
+### Handoff ready?
+- Yes
+
+---
+
+## Session 008 — 25 October 2026
+
+### Task
+Make the optimized schedule CSV reproducible and prevent invalid exports.
+
+### Work completed
+- Confirmed `data/optimized_schedule.csv` is an optimizer-generated output documented by the README, not a manually maintained example.
+- Routed optimizer solar loading through the shared canonical solar-profile loader.
+- Configured the CP-SAT solver to use one worker and a fixed random seed for repeatable output with the same inputs and solver version.
+- Added validation inside `save_schedule()` before the output file is opened, so an invalid schedule cannot replace the existing export.
+- Added tests that compare the regenerated CSV with a fresh optimizer result and confirm invalid schedules do not overwrite an existing file.
+- Regenerated `data/optimized_schedule.csv` using `python -m src.optimizer`.
+- Updated README and model/project documentation with the verified simulated comparison and caveat that it is not real-world savings.
+
+### Files changed
+- `src/optimizer.py`
+- `tests/test_optimizer.py`
+- `data/optimized_schedule.csv`
+- `README.md`
+- `PROJECT_OVERVIEW.md`
+- `docs/SCHEDULING_MODEL.md`
+- `TASK_LOG.md`
+
+### Verified simulated metrics
 ## Session 007 — 24 October 2026
 
 ### Task
@@ -237,38 +350,121 @@ Verify the core implementation after dashboard integration and document the proj
 
 ### Next task
 Review dashboard reliability and prepare the competition demonstration.
+
+---
+
 ## Session 008 — 24 October 2026
 
 ### Task
 Improve dashboard error handling.
 
 ### Changes
-- Added a clearer message for scheduling and validation errors.
-- Unexpected exceptions are directed to the terminal for technical details.
+- Added clearer messages for scheduling and validation errors.
 - Preserved existing dashboard features and optimizer logic.
 
 ### Verification
-- Pending user verification of automated tests and dashboard launch.
+- Pending user verification of automated tests and dashboard launch at that time.
+
+---
+
 ## Session 009 — 24 October 2026
 
 ### Task
 Add a reliability test for missing input files.
 
 ### Changes
-- Added tests/test_data_loading.py.
-- Verified that missing CSV files raise FileNotFoundError.
-- Existing application and optimizer code left unchanged.
+- Added `tests/test_data_loading.py`.
+- Verified missing CSV files raise `FileNotFoundError`.
+- Existing application and optimizer code were left unchanged for this task.
 
 ### Verification
-- Pending test execution.
-## Sustainability Dashboard Update
+- Test execution was pending when this entry was recorded.
+
+---
+
+## Historical Update — Date Not Recorded: Sustainability Dashboard
+
 - Added estimated CO₂ emissions and an emissions comparison chart.
 - Added a user-adjustable illustrative emissions factor.
 - Fixed job-duration validation and removed duplicate tariff validation.
-- Next: test locally, update documentation, and redeploy.
-## Solar-Aware Scheduling
-- Added an illustrative hourly solar availability profile in `data/solar_availability.csv`.
-- Updated the optimizer to account for available solar energy when estimating grid electricity usage and scheduling production.
-- Updated the application and baseline logic for the solar feature.
-- Verified the test suite: **8 tests passed**.
+- No verification result was recorded with this note.
+
+## Historical Update — Date Not Recorded: Solar-Aware Scheduling
+
+- Added the simulated hourly solar profile in `data/solar_availability.csv`.
+- Updated optimizer, application, and baseline calculations to account for solar availability.
+- The suite was reported as passing with 8 tests at that point in the project history.
 - Solar values are simulated; actual savings and emissions reductions have not been measured.
+
+---
+
+## Session 010 — 25 October 2026
+
+### Task
+Resolve the optimizer regression and align the model to the canonical hourly solar profile.
+
+### Work completed
+- Confirmed `data/solar_availability.csv` is the canonical hourly solar source.
+- Aligned the optimizer objective with grid electricity cost after solar use.
+- Replaced the outdated gross-cost assertion with grid-cost and hourly solar-bound checks.
+- Updated the model and project documentation.
+
+### Verified result
+- Full suite: 9 passed in 2.86s.
+- Gross electricity cost and grid electricity cost are reported separately.
+- Solar use is limited by hourly availability and aggregate production load.
+
+---
+
+## Session 011 — 25 October 2026
+
+### Task
+Make optimized schedule export reproducible and validation-gated.
+
+### Work completed
+- Confirmed `data/optimized_schedule.csv` is generated output, not a manually maintained example.
+- Reused the canonical solar-profile loader and configured a single-worker seeded solver.
+- Added validation before writing the export and tests for fresh-export parity and invalid-write protection.
+- Regenerated the CSV and documented the simulated comparison.
+
+### Verified simulated metrics
+- Baseline: gross cost ₹97.00, solar used 0.00 kWh, grid energy 23.00 kWh, grid cost ₹97.00.
+- Optimized: gross cost ₹121.00, solar used 11.50 kWh, grid energy 11.50 kWh, grid cost ₹42.00.
+- Solver status: OPTIMAL; exported schedule validation passed.
+- These are simulated results, not real-world savings.
+
+### Tests
+- Full suite: 11 passed in 1.62s.
+
+---
+
+## Session 012 — 25 October 2026
+
+### Task
+Align dashboard metrics with the canonical solar-aware scheduling model.
+
+### Work completed
+- Confirmed the displayed optimized schedule comes from the current solver run, not a stale export CSV.
+- Added shared baseline/optimized gross-cost, grid-cost, grid-energy, solar-use, and grid-cost-reduction metrics.
+- Labeled costs and reductions as simulated and added metric-consistency and simultaneous-machine solar tests.
+- Updated README and model/project documentation.
+
+### Verified results
+- Full suite: 13 passed in 3.28s.
+- Grid-cost reduction is baseline grid cost minus optimized grid cost; gross cost remains separate.
+- Hourly solar is applied once to aggregate load across active jobs.
+
+---
+
+## Session 013 — 25 October 2026
+
+### Task
+Pre-commit history and schedule-section cleanup.
+
+### Changes
+- Removed the duplicated solar-regression task-log entry and ordered recorded milestones chronologically with unique session numbers.
+- Corrected duplicate production-schedule section numbering in `app.py` without changing dashboard behavior.
+
+### Verification
+- `python -m pytest -q`: 13 passed in 4.16s.
+- `git diff --check`: passed.
