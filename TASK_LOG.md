@@ -261,3 +261,8 @@ Add a reliability test for missing input files.
 
 ### Verification
 - Pending test execution.
+## Sustainability Dashboard Update
+- Added estimated CO₂ emissions and an emissions comparison chart.
+- Added a user-adjustable illustrative emissions factor.
+- Fixed job-duration validation and removed duplicate tariff validation.
+- Next: test locally, update documentation, and redeploy.

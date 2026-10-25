@@ -72,8 +72,22 @@ def prepare_inputs(machine_rows, job_rows, price_rows):
 
     if jobs.isna().any().any() or prices.isna().any().any():
         raise ValueError("Input tables cannot contain empty numeric values.")
+  
 
     machine_ids = set(machines["machine_id"])
+    if not set(jobs["machine_id"]).issubset(machine_ids):
+        raise ValueError("Every job must use a listed machine.")
+
+    if (jobs["duration_hours"] <= 0).any():
+        raise ValueError("Job durations must be positive.")
+    if (jobs["power_kw"] < 0).any():
+        raise ValueError("Power consumption cannot be negative.")
+    if (jobs["release_hour"] < 0).any():
+        raise ValueError("Release hours cannot be negative.")
+    if (jobs["deadline_hour"] > HORIZON).any():
+        raise ValueError(f"Deadlines cannot exceed hour {HORIZON}.")
+    if (jobs["deadline_hour"] <= jobs["release_hour"]).any():
+        raise ValueError("Each deadline must be later than its release hour.")
     if not set(jobs["machine_id"]).issubset(machine_ids):
         raise ValueError("Every job must use a machine listed in the machine table.")
 
@@ -233,7 +247,7 @@ try:
             key="price_editor",
             column_config={
                 "price_per_kwh": st.column_config.NumberColumn(
-                    "Price (₹/kWh)", min_value=0.0, step=0.5
+                    "Price (₹/kWh)", min_value=0.0, step=1.0
                 )
             },
         )
@@ -320,6 +334,51 @@ try:
                     "Savings are hidden to avoid a misleading comparison."
                 )
 
+            st.header("4. Sustainability impact 🌱")
+            st.caption(
+                "Estimated emissions use an illustrative factor, not "
+                "measured factory data. Adjust it to explore assumptions."
+            )
+
+            factor = st.slider(
+                "Illustrative emissions factor (kg CO₂/kWh)",
+                min_value=0.1,
+                max_value=1.5,
+                value=0.7,
+                step=0.1,
+            )
+
+            opt_energy = result["opt_energy"]
+            opt_emissions = opt_energy * factor
+
+            if result["baseline"] is not None:
+                base_energy = result["base_energy"]
+                base_emissions = base_energy * factor
+
+                a, b = st.columns(2)
+                a.metric("Baseline energy", f"{base_energy:.1f} kWh")
+                b.metric("Optimized energy", f"{opt_energy:.1f} kWh")
+
+                a, b = st.columns(2)
+                a.metric("Baseline estimated CO₂", f"{base_emissions:.2f} kg")
+                b.metric("Optimized estimated CO₂", f"{opt_emissions:.2f} kg")
+
+                comparison = pd.DataFrame({
+                    "Scenario": ["Earliest-start", "Optimized"],
+                    "Estimated CO₂ (kg)": [base_emissions, opt_emissions],
+                })
+
+                fig_emissions = px.bar(
+                    comparison,
+                    x="Scenario",
+                    y="Estimated CO₂ (kg)",
+                    color="Scenario",
+                    title="Estimated emissions comparison",
+                )
+                st.plotly_chart(fig_emissions, use_container_width=True)
+            else:
+                st.metric("Optimized energy", f"{opt_energy:.1f} kWh")
+                st.metric("Optimized estimated CO₂", f"{opt_emissions:.2f} kg")
             st.header("4. Optimized production schedule")
             optimized_df = pd.DataFrame(optimized).merge(
                 pd.DataFrame(result["jobs"])[["job_id", "machine_id"]],
