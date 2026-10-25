@@ -266,3 +266,9 @@ Add a reliability test for missing input files.
 - Added a user-adjustable illustrative emissions factor.
 - Fixed job-duration validation and removed duplicate tariff validation.
 - Next: test locally, update documentation, and redeploy.
+## Solar-Aware Scheduling
+- Added an illustrative hourly solar availability profile in `data/solar_availability.csv`.
+- Updated the optimizer to account for available solar energy when estimating grid electricity usage and scheduling production.
+- Updated the application and baseline logic for the solar feature.
+- Verified the test suite: **8 tests passed**.
+- Solar values are simulated; actual savings and emissions reductions have not been measured.

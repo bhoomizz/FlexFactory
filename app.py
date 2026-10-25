@@ -3,7 +3,14 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-from src.baseline import load_data, validate_schedule, calculate_costs, HORIZON
+from src.baseline import (
+    load_data,
+    validate_schedule,
+    calculate_costs,
+    HORIZON,
+    build_solar_profile,
+    estimate_grid_energy_and_emissions,
+)
 from src.optimizer import optimize_schedule
 
 st.set_page_config(page_title="FlexFactory", page_icon="⚡", layout="wide")
@@ -308,6 +315,9 @@ try:
 
             st.success(f"Optimization completed — solver status: {result['status']}")
 
+            solar_profile = build_solar_profile()
+            solar_df = pd.DataFrame(solar_profile)
+
             if result["baseline"] is not None:
                 base_cost = result["base_cost"]
                 opt_cost = result["opt_cost"]
@@ -334,30 +344,43 @@ try:
                     "Savings are hidden to avoid a misleading comparison."
                 )
 
-            st.header("4. Sustainability impact 🌱")
+            st.header("4. Solar match and grid use")
             st.caption(
-                "Estimated emissions use an illustrative factor, not "
-                "measured factory data. Adjust it to explore assumptions."
+                "Solar availability is a simulated daily profile. It estimates how much of the "
+                "production energy aligns with solar generation hours. Grid energy is the remaining demand."
             )
 
             factor = st.slider(
                 "Illustrative emissions factor (kg CO₂/kWh)",
                 min_value=0.1,
                 max_value=1.5,
-                value=0.7,
-                step=0.1,
+                value=0.45,
+                step=0.05,
             )
 
-            opt_energy = result["opt_energy"]
-            opt_emissions = opt_energy * factor
+            solar_chart = px.line(
+                solar_df,
+                x="hour",
+                y="availability",
+                markers=True,
+                title="Simulated hourly solar availability profile",
+                labels={"hour": "Hour", "availability": "Solar availability (0–1)"},
+            )
+            st.plotly_chart(solar_chart, use_container_width=True)
 
             if result["baseline"] is not None:
-                base_energy = result["base_energy"]
-                base_emissions = base_energy * factor
+                baseline_solar, base_grid_energy, base_emissions, base_share = estimate_grid_energy_and_emissions(
+                    result["baseline"], jobs, solar_profile, emissions_factor=factor
+                )
+                opt_solar, opt_grid_energy, opt_emissions, opt_share = estimate_grid_energy_and_emissions(
+                    optimized, jobs, solar_profile, emissions_factor=factor
+                )
 
-                a, b = st.columns(2)
-                a.metric("Baseline energy", f"{base_energy:.1f} kWh")
-                b.metric("Optimized energy", f"{opt_energy:.1f} kWh")
+                a, b, c, d = st.columns(4)
+                a.metric("Baseline solar match", f"{baseline_solar:.1f} kWh")
+                b.metric("Optimized solar match", f"{opt_solar:.1f} kWh")
+                c.metric("Baseline grid energy", f"{base_grid_energy:.1f} kWh")
+                d.metric("Optimized grid energy", f"{opt_grid_energy:.1f} kWh")
 
                 a, b = st.columns(2)
                 a.metric("Baseline estimated CO₂", f"{base_emissions:.2f} kg")
@@ -365,21 +388,31 @@ try:
 
                 comparison = pd.DataFrame({
                     "Scenario": ["Earliest-start", "Optimized"],
+                    "Grid energy (kWh)": [base_grid_energy, opt_grid_energy],
                     "Estimated CO₂ (kg)": [base_emissions, opt_emissions],
                 })
-
                 fig_emissions = px.bar(
                     comparison,
                     x="Scenario",
-                    y="Estimated CO₂ (kg)",
-                    color="Scenario",
-                    title="Estimated emissions comparison",
+                    y=["Grid energy (kWh)", "Estimated CO₂ (kg)"],
+                    title="Grid-energy and emissions comparison",
                 )
                 st.plotly_chart(fig_emissions, use_container_width=True)
+
+                st.caption(
+                    f"Solar share: baseline {base_share * 100:.1f}% vs optimized {opt_share * 100:.1f}%."
+                )
             else:
-                st.metric("Optimized energy", f"{opt_energy:.1f} kWh")
-                st.metric("Optimized estimated CO₂", f"{opt_emissions:.2f} kg")
-            st.header("4. Optimized production schedule")
+                opt_solar, opt_grid_energy, opt_emissions, opt_share = estimate_grid_energy_and_emissions(
+                    optimized, jobs, solar_profile, emissions_factor=factor
+                )
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Solar-coincident energy", f"{opt_solar:.1f} kWh")
+                c2.metric("Grid energy", f"{opt_grid_energy:.1f} kWh")
+                c3.metric("Estimated CO₂", f"{opt_emissions:.2f} kg")
+                st.caption(f"Solar share: {opt_share * 100:.1f}%.")
+
+            st.header("5. Optimized production schedule")
             optimized_df = pd.DataFrame(optimized).merge(
                 pd.DataFrame(result["jobs"])[["job_id", "machine_id"]],
                 on="job_id",

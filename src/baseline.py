@@ -135,6 +135,54 @@ def calculate_costs(jobs, prices, schedule):
     return total_energy, total_cost, details
 
 
+def build_solar_profile():
+    """Return a simple simulated hourly solar availability profile.
+
+    Availability is expressed as a fraction between 0 and 1, where 1 means
+    full solar availability for that hour.
+    """
+    profile = [
+        0.00, 0.00, 0.10, 0.25, 0.45, 0.70,
+        0.95, 1.00, 0.85, 0.50, 0.15, 0.00,
+    ]
+    return [
+        {"hour": hour, "start_hour": hour, "end_hour": hour + 1, "availability": availability}
+        for hour, availability in enumerate(profile)
+    ]
+
+
+def estimate_solar_coincidence(schedule, jobs, solar_profile):
+    """Estimate how much scheduled production energy coincides with solar availability."""
+    job_map = {job["job_id"]: job for job in jobs}
+    solar_map = {int(row["hour"]): float(row["availability"]) for row in solar_profile}
+
+    total_solar_energy = 0.0
+    for row in schedule:
+        job = job_map[row["job_id"]]
+        duration = int(row["end_hour"]) - int(row["start_hour"])
+        power = float(job["power_kw"])
+
+        for hour in range(int(row["start_hour"]), int(row["end_hour"])):
+            total_solar_energy += power * solar_map.get(hour, 0.0)
+
+    return total_solar_energy
+
+
+def estimate_grid_energy_and_emissions(schedule, jobs, solar_profile, emissions_factor=0.45):
+    """Return solar-aligned energy, grid energy, emissions, and solar-share metrics."""
+    job_map = {job["job_id"]: job for job in jobs}
+    total_energy = 0.0
+    for row in schedule:
+        job = job_map[row["job_id"]]
+        total_energy += float(job["power_kw"]) * (int(row["end_hour"]) - int(row["start_hour"]))
+
+    solar_match = estimate_solar_coincidence(schedule, jobs, solar_profile)
+    grid_energy = max(0.0, total_energy - solar_match)
+    emissions = grid_energy * float(emissions_factor)
+    solar_share = solar_match / total_energy if total_energy else 0.0
+    return solar_match, grid_energy, emissions, solar_share
+
+
 def main():
     machines, jobs, prices, schedule = load_data()
     errors = validate_schedule(machines, jobs, prices, schedule)
@@ -146,6 +194,10 @@ def main():
         return
 
     energy, cost, details = calculate_costs(jobs, prices, schedule)
+    solar_profile = build_solar_profile()
+    solar_match, grid_energy, emissions, solar_share = estimate_grid_energy_and_emissions(
+        schedule, jobs, solar_profile
+    )
 
     print("BASELINE SCHEDULE: VALID")
     print("\nJob-wise results:")
@@ -158,6 +210,10 @@ def main():
 
     print(f"\nTotal energy: {energy:.2f} kWh")
     print(f"Total electricity cost: Rs {cost:.2f}")
+    print(f"Solar-coincident energy: {solar_match:.2f} kWh")
+    print(f"Grid energy: {grid_energy:.2f} kWh")
+    print(f"Estimated grid emissions: {emissions:.2f} kg CO₂")
+    print(f"Solar share: {solar_share * 100:.1f}%")
 
 
 if __name__ == "__main__":

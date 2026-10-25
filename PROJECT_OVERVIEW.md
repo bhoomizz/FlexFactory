@@ -171,3 +171,11 @@ Improve the dashboard presentation and explain the optimization results.
 Prepare the competition PPT and project demonstration.
 
 Evaluate appropriate real-world tariff and emissions data sources.
+## Solar-Aware Scheduling
+
+FlexFactory uses a simulated hourly solar availability profile to estimate
+how solar energy can support production scheduling. The optimizer accounts
+for available solar energy when estimating grid electricity usage and cost.
+
+Solar availability is illustrative sample data, not a live weather forecast.
+Actual energy savings and emissions reductions have not been measured.
